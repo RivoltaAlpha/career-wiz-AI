@@ -34,29 +34,10 @@ S002,"English, Literature, Creative Writing","Poetry, Storytelling"
 
 3. **Model Integration**: This data model can be integrated into larger applications, such as student management systems or educational analytics platforms.
 
-### Example Code Snippet (Python)
-
-Here's a basic example of how to load the CSV data using Python and pandas:
-
-```python
-import pandas as pd
-
-# Load the student data from CSV
-data = pd.read_csv('student_data.csv')
-
-# Display the first few rows of the data
-print(data.head())
-```
-
 ## Testing
-POST https://recommendationmodel-fbarbzdsczhqhphb.southafricanorth-01.azurewebsites.net/predict_career
-{
-    "subjects": ["English", "Literature"],
-    "interests": ["News Reporting", "Media Production"]
-}
+https://fluffy-kings-eat.loca.lt/
+![alt text](image.png)
 
-## Generate a requirements.txt file
-pip freeze > requirements.txt
 
 ## Contributing
 
