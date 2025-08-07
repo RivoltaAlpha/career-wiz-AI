@@ -377,7 +377,7 @@ def load_recommender_and_data():
     recommender = XGBoostCareerRecommender()
     try:
         recommender.load_model('xgboost_career_model')
-        courses_df = pd.read_csv('./sample_data/Courses.csv')
+        courses_df = pd.read_csv('./Courses.csv')
         return recommender, courses_df
     except FileNotFoundError:
         st.error("Model files not found. Please run the training code first.")
