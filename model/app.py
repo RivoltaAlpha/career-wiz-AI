@@ -397,7 +397,6 @@ def load_recommender_and_data():
             try:
                 recommender.load_model(model_path)
                 model_loaded = True
-                st.info(f"Model loaded from: {model_path}")
                 break
             except FileNotFoundError:
                 continue
@@ -410,7 +409,6 @@ def load_recommender_and_data():
         for courses_path in courses_paths:
             try:
                 courses_df = pd.read_csv(courses_path)
-                st.info(f"Courses data loaded from: {courses_path}")
                 break
             except FileNotFoundError:
                 continue
