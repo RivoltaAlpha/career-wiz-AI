@@ -376,11 +376,53 @@ st.title("Career Recommendation System")
 def load_recommender_and_data():
     recommender = XGBoostCareerRecommender()
     try:
-        recommender.load_model('./xgboost_career_model')
-        courses_df = pd.read_csv('./Courses.csv')
+        # Try different possible locations for the model files
+        model_paths = [
+            'xgboost_career_model',  # Current directory
+            './xgboost_career_model',  # Explicit current directory
+            '../xgboost_career_model',  # Parent directory
+            './model/xgboost_career_model'  # model subdirectory
+        ]
+        
+        courses_paths = [
+            './Courses.csv',
+            '../Courses.csv',
+            './model/Courses.csv',
+            '../model/Courses.csv'
+        ]
+        
+        # Try to load model from different locations
+        model_loaded = False
+        for model_path in model_paths:
+            try:
+                recommender.load_model(model_path)
+                model_loaded = True
+                st.info(f"Model loaded from: {model_path}")
+                break
+            except FileNotFoundError:
+                continue
+        
+        if not model_loaded:
+            raise FileNotFoundError("Model files not found in any expected location")
+        
+        # Try to load courses data from different locations
+        courses_df = None
+        for courses_path in courses_paths:
+            try:
+                courses_df = pd.read_csv(courses_path)
+                st.info(f"Courses data loaded from: {courses_path}")
+                break
+            except FileNotFoundError:
+                continue
+        
+        if courses_df is None:
+            raise FileNotFoundError("Courses.csv not found")
+            
         return recommender, courses_df
-    except FileNotFoundError:
-        st.error("Model files not found. Please run the training code first.")
+        
+    except FileNotFoundError as e:
+        st.error(f"Files not found: {str(e)}")
+        st.error("Please run the training code first to generate the model files.")
         return None, None
 
 recommender, courses_df = load_recommender_and_data()
