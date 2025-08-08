@@ -262,16 +262,47 @@ class StudentInput(BaseModel):
 async def load_model_and_data():
     global recommender, courses_df
     logger.info("Loading model and data...")
+    logger.info(f"Current working directory: {os.getcwd()}")
+    logger.info(f"Files in current directory: {os.listdir('.')}")
+    
     try:
+        # Try to load the model
         recommender = XGBoostCareerRecommender()
+        
+        # Check if model files exist
+        model_files = [
+            './xgboost_career_model_preprocessors.pkl',
+            './xgboost_career_model_xgboost.json'
+        ]
+        
+        for file in model_files:
+            if not os.path.exists(file):
+                logger.error(f"Model file not found: {file}")
+                raise FileNotFoundError(f"Model file not found: {file}")
+        
         recommender.load_model('./xgboost_career_model')
+        logger.info("Model loaded successfully.")
+        
+        # Check if courses file exists
+        if not os.path.exists('./Courses.csv'):
+            logger.error("Courses.csv not found")
+            raise FileNotFoundError("Courses.csv not found")
+            
         courses_df = pd.read_csv('./Courses.csv')
+        logger.info(f"Courses data loaded successfully. Shape: {courses_df.shape}")
         logger.info("Model and data loaded successfully.")
+        
+    except FileNotFoundError as e:
+        logger.error(f"File not found: {e}")
+        recommender = None
+        courses_df = None
     except Exception as e:
         logger.error(f"Failed to load model or data: {e}")
-        recommender = None # Ensure recommender is None if loading fails
+        logger.error(f"Error type: {type(e).__name__}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        recommender = None
         courses_df = None
-
 
 # Prediction endpoint
 @app.post("/predict")
