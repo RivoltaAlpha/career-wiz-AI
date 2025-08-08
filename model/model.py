@@ -3,19 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import time
 import os
 import xgboost as xgb
-import pandas as pd
-import numpy as np
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, mean_squared_error
+from sklearn.metrics import mean_squared_error
 import pickle
 import logging
-from typing import List, Dict, Tuple
-
+import itertools
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,10 +29,8 @@ app.add_middleware(
 )
 
 # Global variables
-xgboost_model = None
-students_df = None
+recommender = None
 courses_df = None
-models_trained = False
 
 class XGBoostCareerRecommender:
     def __init__(self, n_estimators=100, max_depth=6, learning_rate=0.1,
@@ -91,7 +85,13 @@ class XGBoostCareerRecommender:
             'communication': ['communication', 'public speaking', 'presentation', 'media', 'journalism']
         }
 
-        for _, student in students_df.iterrows():
+        for index in students_df.index:
+            student = students_df.loc[index]
+
+            if 'subjects' not in student:
+                logger.error(f"Error: 'subjects' not in student data for index {index}. Columns: {student.index.tolist()}")
+                continue # Skip this student if 'subjects' is missing
+
             student_subjects = set(student['subjects'].split(', '))
             student_interests = set(student['interests'].split(', '))
 
@@ -127,10 +127,11 @@ class XGBoostCareerRecommender:
                 course_stem_count = sum(1 for subj in course_subjects if subj in stem_subjects)
                 course_humanities_count = sum(1 for subj in course_subjects if subj in humanities_subjects)
 
-                features['student_stem_ratio'] = student_stem_count / len(stem_subjects)
-                features['student_humanities_ratio'] = student_humanities_count / len(humanities_subjects)
-                features['course_stem_ratio'] = course_stem_count / len(stem_subjects)
-                features['course_humanities_ratio'] = course_humanities_count / len(humanities_subjects)
+                features['student_stem_ratio'] = student_stem_count / len(stem_subjects) if len(stem_subjects) > 0 else 0
+                features['student_humanities_ratio'] = student_humanities_count / len(humanities_subjects) if len(humanities_subjects) > 0 else 0
+                features['course_stem_ratio'] = course_stem_count / len(stem_subjects) if len(stem_subjects) > 0 else 0
+                features['course_humanities_ratio'] = course_humanities_count / len(humanities_subjects) if len(humanities_subjects) > 0 else 0
+
 
                 # Alignment between student and course preferences
                 features['stem_alignment'] = min(features['student_stem_ratio'], features['course_stem_ratio'])
@@ -164,114 +165,6 @@ class XGBoostCareerRecommender:
 
         return pd.DataFrame(features_list)
 
-    def prepare_training_data(self, students_df: pd.DataFrame, courses_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Prepare training data for XGBoost
-
-        Args:
-            students_df: DataFrame with student information
-            courses_df: DataFrame with course information
-
-        Returns:
-            Tuple of (features, targets)
-        """
-        logger.info("Extracting advanced features...")
-
-        # Extract features
-        features_df = self.extract_advanced_features(students_df, courses_df)
-
-        # Separate features and target
-        target_col = 'compatibility_score'
-        feature_cols = [col for col in features_df.columns
-                       if col not in ['student_id', 'course_name', target_col]]
-
-        X = features_df[feature_cols]
-        y = features_df[target_col]
-
-        # Store feature names
-        self.feature_names = feature_cols
-
-        # Scale features
-        X_scaled = self.scaler.fit_transform(X)
-
-        logger.info(f"Prepared {X_scaled.shape[0]} training samples with {X_scaled.shape[1]} features")
-
-        return X_scaled, y.values
-
-    def train(self, students_df: pd.DataFrame, courses_df: pd.DataFrame,
-              test_size=0.2, early_stopping_rounds=20):
-        """
-        Train the XGBoost model
-
-        Args:
-            students_df: DataFrame with student information
-            courses_df: DataFrame with course information
-            test_size: Fraction of data for testing
-            early_stopping_rounds: Early stopping patience
-        """
-        logger.info("Preparing training data...")
-
-        # Prepare training data
-        X, y = self.prepare_training_data(students_df, courses_df)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=self.random_state, stratify=None
-        )
-
-        # Initialize XGBoost model
-        self.model = xgb.XGBRegressor(
-            n_estimators=self.n_estimators,
-            max_depth=self.max_depth,
-            learning_rate=self.learning_rate,
-            objective=self.objective,
-            random_state=self.random_state,
-            reg_alpha=0.1,  # L1 regularization
-            reg_lambda=0.1,  # L2 regularization
-            subsample=0.8,   # Subsample ratio
-            colsample_bytree=0.8,  # Feature sampling
-            eval_metric='rmse'
-        )
-
-        # Train model with early stopping
-        logger.info("Training XGBoost model...")
-
-        self.model.fit(
-            X_train, y_train,
-            eval_set=[(X_train, y_train), (X_test, y_test)],
-            early_stopping_rounds=early_stopping_rounds,
-            verbose=False
-        )
-
-        # Evaluate model
-        train_pred = self.model.predict(X_train)
-        test_pred = self.model.predict(X_test)
-
-        train_rmse = np.sqrt(mean_squared_error(y_train, train_pred))
-        test_rmse = np.sqrt(mean_squared_error(y_test, test_pred))
-
-        logger.info(f"Training RMSE: {train_rmse:.4f}")
-        logger.info(f"Test RMSE: {test_rmse:.4f}")
-
-        # Feature importance
-        feature_importance = self.model.feature_importances_
-        importance_df = pd.DataFrame({
-            'feature': self.feature_names,
-            'importance': feature_importance
-        }).sort_values('importance', ascending=False)
-
-        logger.info("Top 10 most important features:")
-        for _, row in importance_df.head(10).iterrows():
-            logger.info(f"  {row['feature']}: {row['importance']:.4f}")
-
-        logger.info("Training completed!")
-
-        return {
-            'train_rmse': train_rmse,
-            'test_rmse': test_rmse,
-            'feature_importance': importance_df
-        }
-
     def predict_for_student(self, student_data: Dict, courses_df: pd.DataFrame, top_k=5) -> List[Tuple[str, float]]:
         """
         Predict career recommendations for a single student
@@ -280,7 +173,6 @@ class XGBoostCareerRecommender:
             student_data: Dictionary with 'subjects' and 'interests' keys
             courses_df: DataFrame with course information
             top_k: Number of top recommendations to return
-
         Returns:
             List of (course_name, confidence_score) tuples
         """
@@ -301,7 +193,14 @@ class XGBoostCareerRecommender:
         feature_cols = [col for col in features_df.columns
                        if col not in ['student_id', 'course_name', 'compatibility_score']]
 
-        X = features_df[feature_cols]
+        # Ensure all expected features are present, fill missing with 0
+        for col in self.feature_names:
+            if col not in features_df.columns:
+                features_df[col] = 0
+
+        # Reorder columns to match training data
+        X = features_df[self.feature_names]
+
         X_scaled = self.scaler.transform(X)
 
         # Make predictions
@@ -317,194 +216,91 @@ class XGBoostCareerRecommender:
 
         return recommendations[:top_k]
 
-    def get_feature_importance(self, top_n=20) -> pd.DataFrame:
-        """
-        Get feature importance from trained model
-
-        Args:
-            top_n: Number of top features to return
-
-        Returns:
-            DataFrame with feature importance
-        """
-        if self.model is None:
-            raise ValueError("Model not trained yet!")
-
-        importance_df = pd.DataFrame({
-            'feature': self.feature_names,
-            'importance': self.model.feature_importances_
-        }).sort_values('importance', ascending=False)
-
-        return importance_df.head(top_n)
-
-    def save_model(self, filepath: str):
-        """Save the trained model and preprocessors"""
-        if self.model is None:
-            raise ValueError("No model to save!")
-
-        # Save XGBoost model
-        self.model.save_model(f"{filepath}_xgboost.json")
-
-        # Save preprocessors and metadata
-        with open(f"{filepath}_preprocessors.pkl", 'wb') as f:
-            pickle.dump({
-                'scaler': self.scaler,
-                'course_encoder': self.course_encoder,
-                'feature_names': self.feature_names,
-                'n_estimators': self.n_estimators,
-                'max_depth': self.max_depth,
-                'learning_rate': self.learning_rate,
-                'objective': self.objective,
-                'random_state': self.random_state
-            }, f)
-
-        logger.info(f"Model saved to {filepath}")
-
     def load_model(self, filepath: str):
         """Load a trained model and preprocessors"""
-        # Load XGBoost model
-        self.model = xgb.XGBRegressor()
-        self.model.load_model(f"{filepath}_xgboost.json")
+        try:
+            # Load preprocessors and metadata first
+            with open(f"{filepath}_preprocessors.pkl", 'rb') as f:
+                data = pickle.load(f)
+                self.scaler = data['scaler']
+                self.course_encoder = data['course_encoder']
+                self.feature_names = data['feature_names']
+                self.n_estimators = data['n_estimators']
+                self.max_depth = data['max_depth']
+                self.learning_rate = data['learning_rate']
+                self.objective = data['objective']
+                self.random_state = data['random_state']
 
-        # Load preprocessors and metadata
-        with open(f"{filepath}_preprocessors.pkl", 'rb') as f:
-            data = pickle.load(f)
-            self.scaler = data['scaler']
-            self.course_encoder = data['course_encoder']
-            self.feature_names = data['feature_names']
-            self.n_estimators = data['n_estimators']
-            self.max_depth = data['max_depth']
-            self.learning_rate = data['learning_rate']
-            self.objective = data['objective']
-            self.random_state = data['random_state']
+            # Initialize the model with loaded hyperparameters before loading the model state
+            self.model = xgb.XGBRegressor(
+                n_estimators=self.n_estimators,
+                max_depth=self.max_depth,
+                learning_rate=self.learning_rate,
+                objective=self.objective,
+                random_state=self.random_state
+            )
+            # Load XGBoost model state
+            self.model.load_model(f"{filepath}_xgboost.json")
 
-        logger.info(f"Model loaded from {filepath}")
+            logger.info(f"Model loaded from {filepath}")
+        except FileNotFoundError as e:
+            logger.error(f"Model file not found: {e}")
+            raise FileNotFoundError(f"Model file not found: {e}")
+        except Exception as e:
+            logger.error(f"Error loading model: {e}")
+            raise RuntimeError(f"Error loading model: {e}")
 
 
-class StudentData(BaseModel):
+# Pydantic model for request body
+class StudentInput(BaseModel):
     subjects: List[str]
     interests: List[str]
+    top_k: Optional[int] = 5 # Default to 5 recommendations
 
-class ModelChoice(BaseModel):
-    model_type: str  # "deep_learning", "xgboost", or "both"
-
-class ComparisonRequest(BaseModel):
-    subjects: List[str]
-    interests: List[str]
-    top_k: Optional[int] = 5
-
-class RecommendationResponse(BaseModel):
-    model_name: str
-    recommendations: List[Dict[str, float]]
-    prediction_time: float
-    confidence_scores: List[float]
-
-class ComparisonResponse(BaseModel):
-    xgboost: Optional[RecommendationResponse]
-    comparison_summary: Dict
-
-def load_data():
-    """Load student and course data"""
-    global students_df, courses_df
-    try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        students_path = os.path.join(base_dir, 'student_data.csv')
-        courses_path = os.path.join(base_dir, 'Courses.csv')
-        
-        students_df = pd.read_csv(students_path)
-        courses_df = pd.read_csv(courses_path)
-        
-        logger.info("Data loaded successfully")
-        return True
-    except Exception as e:
-        logger.error(f"Error loading data: {str(e)}")
-        return False
-
-def train_models():
-    """Train both models"""
-    global xgboost_model, models_trained
-    
-    try:
-        xgboost_model = XGBoostCareerRecommender(
-            n_estimators=100,
-            max_depth=6,
-            learning_rate=0.1
-        )
-        
-        # Train XGBoost model
-        logger.info("Training XGBoost model...")
-        xgboost_model.train(students_df, courses_df)
-        
-    except Exception as e:
-        logger.error(f"Error training models: {str(e)}")
-        models_trained = False
-        return False
-
+# Event handler to load the model and data on startup
 @app.on_event("startup")
-async def startup_event():
-    """Initialize models on startup"""
-    logger.info("Starting up application...")
-    
-    if not load_data():
-        raise HTTPException(status_code=500, detail="Failed to load data")
-    
-    if not train_models():
-        raise HTTPException(status_code=500, detail="Failed to train models")
-    
-    logger.info("Application startup complete")
+async def load_model_and_data():
+    global recommender, courses_df
+    logger.info("Loading model and data...")
+    try:
+        recommender = XGBoostCareerRecommender()
+        recommender.load_model('./xgboost_career_model')
+        courses_df = pd.read_csv('./Courses.csv')
+        logger.info("Model and data loaded successfully.")
+    except Exception as e:
+        logger.error(f"Failed to load model or data: {e}")
+        recommender = None # Ensure recommender is None if loading fails
+        courses_df = None
 
-@app.get("/")
-def read_root():
-    return {"message": "Career Recommendation Comparison API", "version": "1.0.0"}
 
+# Prediction endpoint
+@app.post("/predict")
+async def predict_career(student_input: StudentInput):
+    global recommender, courses_df
+
+    if recommender is None or courses_df is None:
+        raise HTTPException(status_code=500, detail="Model or data not loaded. Please check server logs.")
+
+    student_data = {
+        'subjects': student_input.subjects,
+        'interests': student_input.interests
+    }
+
+    try:
+        recommendations = recommender.predict_for_student(
+            student_data,
+            courses_df,
+            top_k=student_input.top_k
+        )
+        return {"recommendations": recommendations}
+    except Exception as e:
+        logger.error(f"Error during prediction: {e}")
+        raise HTTPException(status_code=500, detail=f"Error during prediction: {e}")
+
+# Health check endpoint
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "models_trained": models_trained,
-        "data_loaded": students_df is not None and courses_df is not None
-    }
-
-@app.get("/models/status")
-async def get_model_status():
-    """Get status of trained models"""
-    return {
-        "xgboost_trained": xgboost_model is not None,
-        "models_ready": models_trained
-    }
-
-@app.post("/predict/xgboost")
-async def predict_xgboost(student_data: StudentData):
-    """Get predictions from XGBoost model only"""
-    if not models_trained or xgboost_model is None:
-        raise HTTPException(status_code=503, detail="XGBoost model not available")
-    
-    try:
-        start_time = time.time()
-        
-        student_dict = {
-            'subjects': student_data.subjects,
-            'interests': student_data.interests
-        }
-        
-        recommendations = xgboost_model.predict_for_student(
-            student_dict, courses_df, top_k=5
-        )
-        
-        prediction_time = time.time() - start_time
-        
-        formatted_recommendations = [
-            {"course_name": course, "confidence": float(score)}
-            for course, score in recommendations
-        ]
-        
-        return {
-            "model_name": "XGBoost",
-            "recommendations": formatted_recommendations,
-            "prediction_time": prediction_time,
-            "total_courses_considered": len(courses_df)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error in XGBoost prediction: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error generating XGBoost recommendations")
+    if recommender is not None and courses_df is not None:
+        return {"status": "ok", "model_loaded": True, "data_loaded": True}
+    else:
+        return {"status": "warning", "model_loaded": recommender is not None, "data_loaded": courses_df is not None, "message": "Model or data not fully loaded"}
