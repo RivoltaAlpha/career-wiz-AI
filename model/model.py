@@ -266,36 +266,72 @@ async def load_model_and_data():
     logger.info(f"Files in current directory: {os.listdir('.')}")
     
     try:
-        # Try to load the model
         recommender = XGBoostCareerRecommender()
         
-        # Check if model files exist
-        model_files = [
-            './xgboost_career_model_preprocessors.pkl',
-            './xgboost_career_model_xgboost.json'
+        model_paths = [
+            './model/xgboost_career_model',  # Files are in model subdirectory
+            './xgboost_career_model',        # Current directory fallback
         ]
         
-        for file in model_files:
-            if not os.path.exists(file):
-                logger.error(f"Model file not found: {file}")
-                raise FileNotFoundError(f"Model file not found: {file}")
+        model_loaded = False
+        for model_path in model_paths:
+            try:
+                # Check if both required files exist
+                preprocessor_file = f"{model_path}_preprocessors.pkl"
+                xgboost_file = f"{model_path}_xgboost.json"
+                
+                logger.info(f"Checking for model files: {preprocessor_file}, {xgboost_file}")
+                
+                if os.path.exists(preprocessor_file) and os.path.exists(xgboost_file):
+                    recommender.load_model(model_path)
+                    logger.info(f"Model loaded successfully from: {model_path}")
+                    model_loaded = True
+                    break
+                else:
+                    logger.info(f"Model files not found at: {model_path}")
+                    if os.path.exists(preprocessor_file):
+                        logger.info(f"  Found: {preprocessor_file}")
+                    else:
+                        logger.info(f"  Missing: {preprocessor_file}")
+                    if os.path.exists(xgboost_file):
+                        logger.info(f"  Found: {xgboost_file}")
+                    else:
+                        logger.info(f"  Missing: {xgboost_file}")
+            except Exception as e:
+                logger.warning(f"Failed to load model from {model_path}: {e}")
+                continue
         
-        recommender.load_model('./xgboost_career_model')
-        logger.info("Model loaded successfully.")
+        if not model_loaded:
+            # List files in model directory for debugging
+            if os.path.exists('./model'):
+                logger.info(f"Files in model directory: {os.listdir('./model')}")
+            raise FileNotFoundError("Model files not found in any expected location")
         
-        # Check if courses file exists
-        if not os.path.exists('./Courses.csv'):
-            logger.error("Courses.csv not found")
-            raise FileNotFoundError("Courses.csv not found")
+        courses_paths = [
+            './model/Courses.csv',    
+            './Courses.csv',          
+        ]
+        
+        courses_loaded = False
+        for courses_path in courses_paths:
+            try:
+                logger.info(f"Checking for courses file: {courses_path}")
+                if os.path.exists(courses_path):
+                    courses_df = pd.read_csv(courses_path)
+                    logger.info(f"Courses data loaded from: {courses_path}. Shape: {courses_df.shape}")
+                    courses_loaded = True
+                    break
+                else:
+                    logger.info(f"Courses file not found at: {courses_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load courses from {courses_path}: {e}")
+                continue
+        
+        if not courses_loaded:
+            raise FileNotFoundError("Courses.csv not found in any expected location")
             
-        courses_df = pd.read_csv('./Courses.csv')
-        logger.info(f"Courses data loaded successfully. Shape: {courses_df.shape}")
         logger.info("Model and data loaded successfully.")
         
-    except FileNotFoundError as e:
-        logger.error(f"File not found: {e}")
-        recommender = None
-        courses_df = None
     except Exception as e:
         logger.error(f"Failed to load model or data: {e}")
         logger.error(f"Error type: {type(e).__name__}")
@@ -303,6 +339,43 @@ async def load_model_and_data():
         logger.error(f"Traceback: {traceback.format_exc()}")
         recommender = None
         courses_df = None
+
+# Add debug endpoint to help troubleshoot
+@app.get("/debug")
+async def debug_info():
+    try:
+        cwd = os.getcwd()
+        files = os.listdir('.')
+        
+        # Check what's in the model directory
+        model_dir_files = []
+        if os.path.exists('./model'):
+            model_dir_files = os.listdir('./model')
+        
+        # Check for specific files in different locations
+        file_locations = {
+            'preprocessors_current': os.path.exists('./xgboost_career_model_preprocessors.pkl'),
+            'xgboost_current': os.path.exists('./xgboost_career_model_xgboost.json'),
+            'courses_current': os.path.exists('./Courses.csv'),
+            'preprocessors_model_dir': os.path.exists('./model/xgboost_career_model_preprocessors.pkl'),
+            'xgboost_model_dir': os.path.exists('./model/xgboost_career_model_xgboost.json'),
+            'courses_model_dir': os.path.exists('./model/Courses.csv'),
+        }
+        
+        return {
+            "current_working_directory": cwd,
+            "files_in_current_directory": files,
+            "files_in_model_directory": model_dir_files,
+            "file_locations": file_locations,
+            "recommender_loaded": recommender is not None,
+            "courses_loaded": courses_df is not None
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/")
+async def root():
+    return {"message": "Career Recommendation API", "version": "2.0.0", "status": "running"}
 
 # Prediction endpoint
 @app.post("/predict")
