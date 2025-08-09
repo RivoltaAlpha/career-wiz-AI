@@ -209,10 +209,14 @@ class XGBoostCareerRecommender:
         # Combine with course names
         recommendations = []
         for i, course_name in enumerate(features_df['course_name']):
-            recommendations.append((course_name, float(predictions[i])))
+            recommendations.append({
+                "course_name": course_name,
+                "confidence_score": float(predictions[i]),
+                "match_percentage": round(float(predictions[i]) * 100, 2)
+            })
 
         # Sort by prediction score and return top K
-        recommendations.sort(key=lambda x: x[1], reverse=True)
+        recommendations.sort(key=lambda x: x['confidence_score'], reverse=True)
 
         return recommendations[:top_k]
 
@@ -256,6 +260,16 @@ class StudentInput(BaseModel):
     subjects: List[str]
     interests: List[str]
     top_k: Optional[int] = 5 # Default to 5 recommendations
+    
+class RecommendationResponse(BaseModel):
+    course_name: str
+    confidence_score: float
+    match_percentage: float
+
+class PredictionResponse(BaseModel):
+    recommendations: List[RecommendationResponse]
+    total_courses_analyzed: int
+    request_timestamp: str
 
 # Event handler to load the model and data on startup
 @app.on_event("startup")
@@ -396,7 +410,12 @@ async def predict_career(student_input: StudentInput):
             courses_df,
             top_k=student_input.top_k
         )
-        return {"recommendations": recommendations}
+        from datetime import datetime
+        return PredictionResponse(
+            recommendations=recommendations,
+            total_courses_analyzed=len(courses_df),
+            request_timestamp=datetime.now().isoformat()
+        )
     except Exception as e:
         logger.error(f"Error during prediction: {e}")
         raise HTTPException(status_code=500, detail=f"Error during prediction: {e}")
